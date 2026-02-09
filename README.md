@@ -38,3 +38,11 @@ A Telegram bot that validates Bybit tickers and returns a volatility/risk report
 ## Suggested Future Improvements
 1. `/chart` command to return volatility + ATR plot image for faster visual decisions.
 2. `/alert` command for notifying users when price nears selected percentile DCA levels.
+
+
+## Commands
+- Send `BTC` style text for volatility analysis.
+- Send `/dca <ticker> <first_cost_basis>` to generate a 6-session short DCA ladder.
+  - Example: `/dca BTC 1000`
+  - Session 1 is a market entry at current price using the provided cost basis.
+  - Sessions 2-6 are upward DCA entries derived from pump percentiles, each doubling total coin exposure.

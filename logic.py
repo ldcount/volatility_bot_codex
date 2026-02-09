@@ -46,6 +46,28 @@ class OHLCVCandle:
     volume: float
 
 
+@dataclass(frozen=True)
+class DCAStep:
+    session: int
+    percentile: int | None
+    price: float
+    buy_qty: float
+    total_qty_after: float
+    session_cost: float
+
+
+@dataclass(frozen=True)
+class DCAPlan:
+    symbol: str
+    category: str
+    current_price: float
+    first_cost_basis: float
+    steps: list[DCAStep]
+    total_qty: float
+    total_cost: float
+    average_price: float
+
+
 class BybitClient:
     def __init__(self, base_url: str = BYBIT_BASE_URL, timeout: float = 10.0, retries: int = 3):
         self.base_url = base_url.rstrip("/")
@@ -185,6 +207,71 @@ class VolatilityReportService:
         stats = self.analyzer.analyze(candles)
         return format_report(resolution, stats)
 
+    def generate_dca_plan(self, user_text: str, first_cost_basis: float) -> DCAPlan:
+        if first_cost_basis <= 0:
+            raise ValidationError("First cost basis must be a positive number (e.g., 1000).")
+
+        resolution = self.bybit.resolve_symbol(user_text)
+        candles = self.bybit.fetch_daily_ohlcv(resolution.category, resolution.symbol, limit=1000)
+        stats = self.analyzer.analyze(candles)
+        current_price = candles[-1].close
+
+        # 6 sessions total:
+        # S1 at current price (user's first entry), then 5 upward DCA sessions by percentile levels.
+        dca_percentiles = [80, 85, 90, 95, 99]
+
+        steps: list[DCAStep] = []
+
+        initial_qty = first_cost_basis / current_price
+        total_qty = initial_qty
+        total_cost = first_cost_basis
+
+        steps.append(
+            DCAStep(
+                session=1,
+                percentile=None,
+                price=float(current_price),
+                buy_qty=float(initial_qty),
+                total_qty_after=float(total_qty),
+                session_cost=float(first_cost_basis),
+            )
+        )
+
+        for idx, percentile in enumerate(dca_percentiles, start=2):
+            move = stats["dca_levels"][percentile]
+            price = current_price * (1 + move)
+
+            # Each session doubles the number of coins already in the trade.
+            buy_qty = total_qty
+            session_cost = buy_qty * price
+
+            total_qty += buy_qty
+            total_cost += session_cost
+
+            steps.append(
+                DCAStep(
+                    session=idx,
+                    percentile=percentile,
+                    price=float(price),
+                    buy_qty=float(buy_qty),
+                    total_qty_after=float(total_qty),
+                    session_cost=float(session_cost),
+                )
+            )
+
+        average_price = total_cost / total_qty
+
+        return DCAPlan(
+            symbol=resolution.symbol,
+            category=resolution.category,
+            current_price=float(current_price),
+            first_cost_basis=float(first_cost_basis),
+            steps=steps,
+            total_qty=float(total_qty),
+            total_cost=float(total_cost),
+            average_price=float(average_price),
+        )
+
 
 def normalize_ticker(raw: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]", "", raw.upper().strip())
@@ -232,4 +319,38 @@ def format_report(resolution: SymbolResolution, stats: dict[str, Any]) -> str:
             "_Tip: Higher percentile levels represent rarer up-moves and can be used as more conservative DCA zones._",
         ]
     )
+    return "\n".join(lines)
+
+
+def format_dca_plan(plan: DCAPlan) -> str:
+    lines = [
+        f"*Short DCA Ladder — {plan.symbol}*",
+        f"Market: `{plan.category}` | Reference Price: `{plan.current_price:.6f}`",
+        f"Initial Cost Basis: `{plan.first_cost_basis:.2f}`",
+        "",
+        "*6 DCA Sessions (S1 at market, S2-S6 at percentiles; each session doubles total coins)*",
+    ]
+
+    for step in plan.steps:
+        level_label = "Market" if step.percentile is None else f"P{step.percentile}"
+        lines.append(
+            (
+                f"• S{step.session} ({level_label}) @ `{step.price:.6f}` → "
+                f"Buy `{step.buy_qty:.6f}` coins (session cost `{step.session_cost:.2f}`) | "
+                f"Total coins `{step.total_qty_after:.6f}`"
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            (
+                "*After all DCAs*\n"
+                f"• Average shorting price: `{plan.average_price:.6f}`\n"
+                f"• Total coins: `{plan.total_qty:.6f}`\n"
+                f"• Total cost basis: `{plan.total_cost:.2f}`"
+            ),
+        ]
+    )
+
     return "\n".join(lines)
