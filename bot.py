@@ -39,6 +39,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Commands:\n"
         "• Send a ticker for volatility report.\n"
         "• /dca <ticker> <first_cost_basis> for a 6-step short DCA ladder.\n"
+        "• /funding for top 10 most negative linear funding rates.\n"
         "Example: /dca BTC 1000"
     )
 
@@ -48,6 +49,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Usage:\n"
         "• Send a single ticker symbol (BTC, SOLUSDT, XRP) for volatility stats.\n"
         "• Use /dca <ticker> <first_cost_basis> for short DCA ladder planning.\n"
+        "• Use /funding for top 10 most negative linear funding rates.\n"
         "• Example: /dca BTC 1000"
     )
 
@@ -83,6 +85,24 @@ async def dca_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Unexpected error while building DCA plan. Please retry in a few seconds."
         )
 
+
+async def funding_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    await update.message.chat.send_action(action=ChatAction.TYPING)
+
+    try:
+        report = await asyncio.to_thread(SERVICE.generate_funding_report, 10)
+        await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+    except BotError as exc:
+        await update.message.reply_text(f"Error: {exc}")
+    except Exception as exc:  # pylint: disable=broad-except
+        LOGGER.exception("Unexpected failure while handling /funding", exc_info=exc)
+        await update.message.reply_text(
+            "Unexpected error while loading funding rates. Please retry in a few seconds."
+        )
+
 async def analyze_ticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
@@ -112,6 +132,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("dca", dca_cmd))
+    app.add_handler(CommandHandler("funding", funding_cmd))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_ticker)
     )

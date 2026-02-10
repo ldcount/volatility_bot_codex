@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -68,12 +69,29 @@ class DCAPlan:
     average_price: float
 
 
+@dataclass(frozen=True)
+class FundingEntry:
+    symbol: str
+    funding_rate: float
+
+
 class BybitClient:
-    def __init__(self, base_url: str = BYBIT_BASE_URL, timeout: float = 10.0, retries: int = 3):
+    def __init__(
+        self,
+        base_url: str = BYBIT_BASE_URL,
+        timeout: float = 10.0,
+        retries: int = 3,
+        api_key: str = "",
+        api_secret: str = "",
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.retries = retries
+        self.api_key = api_key.strip() or os.getenv("BYBIT_API_KEY", "").strip()
+        self.api_secret = api_secret.strip() or os.getenv("BYBIT_API_SECRET", "").strip()
         self.session = requests.Session()
+        if self.api_key:
+            self.session.headers.update({"X-BAPI-API-KEY": self.api_key})
 
     def _request(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
@@ -148,6 +166,36 @@ class BybitClient:
         candles.sort(key=lambda c: c.ts)
         return candles
 
+    def fetch_most_negative_funding(self, limit: int = 10) -> list[FundingEntry]:
+        payload = self._request(
+            "/v5/market/tickers",
+            {
+                "category": "linear",
+            },
+        )
+        tickers = payload.get("result", {}).get("list", [])
+        if not tickers:
+            raise BybitAPIError("Funding data is currently unavailable from Bybit.")
+
+        entries: list[FundingEntry] = []
+        for item in tickers:
+            symbol = item.get("symbol", "")
+            funding_raw = item.get("fundingRate")
+            if not symbol or funding_raw in (None, ""):
+                continue
+            try:
+                funding_rate = float(funding_raw)
+            except (TypeError, ValueError):
+                continue
+            if funding_rate < 0:
+                entries.append(FundingEntry(symbol=symbol, funding_rate=funding_rate))
+
+        if not entries:
+            raise BybitAPIError("No negative funding rates found right now on Bybit linear markets.")
+
+        entries.sort(key=lambda x: x.funding_rate)
+        return entries[: max(1, limit)]
+
 
 class VolatilityAnalyzer:
     PERCENTILES = [75, 80, 85, 90, 95, 99]
@@ -206,6 +254,10 @@ class VolatilityReportService:
         candles = self.bybit.fetch_daily_ohlcv(resolution.category, resolution.symbol, limit=1000)
         stats = self.analyzer.analyze(candles)
         return format_report(resolution, stats)
+
+    def generate_funding_report(self, limit: int = 10) -> str:
+        entries = self.bybit.fetch_most_negative_funding(limit=limit)
+        return format_funding_report(entries)
 
     def generate_dca_plan(self, user_text: str, first_cost_basis: float) -> DCAPlan:
         if first_cost_basis <= 0:
@@ -319,6 +371,13 @@ def format_report(resolution: SymbolResolution, stats: dict[str, Any]) -> str:
             "_Tip: Higher percentile levels represent rarer up-moves and can be used as more conservative DCA zones._",
         ]
     )
+    return "\n".join(lines)
+
+
+def format_funding_report(entries: list[FundingEntry]) -> str:
+    lines = ["*Most negative funding (Linear)*"]
+    for idx, entry in enumerate(entries, start=1):
+        lines.append(f"Coin {idx}: `{entry.symbol}`: `{entry.funding_rate * 100:.4f}%`")
     return "\n".join(lines)
 
 

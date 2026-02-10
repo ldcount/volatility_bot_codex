@@ -22,9 +22,12 @@ A Telegram bot that validates Bybit tickers and returns a volatility/risk report
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-3. Set environment variable:
+3. Set environment variables:
    ```bash
    export TELEGRAM_BOT_TOKEN="<your-token>"
+   # Optional (public funding endpoint is used; keep for private endpoint fallback)
+   export BYBIT_API_KEY="<your-bybit-api-key>"
+   export BYBIT_API_SECRET="<your-bybit-api-secret>"
    ```
 4. Run:
    ```bash
@@ -43,6 +46,7 @@ A Telegram bot that validates Bybit tickers and returns a volatility/risk report
 ## Commands
 - Send `BTC` style text for volatility analysis.
 - Send `/dca <ticker> <first_cost_basis>` to generate a 6-session short DCA ladder.
+- Send `/funding` to get the 10 most negative funding rates in Bybit Linear, sorted ascending (most negative first).
   - Example: `/dca BTC 1000`
   - Session 1 is a market entry at current price using the provided cost basis.
   - Sessions 2-6 are upward DCA entries derived from pump percentiles, each doubling total coin exposure.
